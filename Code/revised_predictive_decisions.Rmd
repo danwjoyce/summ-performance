@@ -1,0 +1,899 @@
+---
+title: "Summary Measures of Performance for Predictive Models"
+author: "Dan W Joyce"
+date: "10th October 2019"
+output:
+  html_document:
+    df_print: paged
+    number_sections: true
+header-includes: \usepackage{caption}
+---
+
+
+
+```{r 'setup', echo = FALSE, message=FALSE, cache = FALSE}
+rm( list = ls() )
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(png)
+library(grid)
+library(gridExtra)
+library(Hmisc)
+library(dplyr)
+
+library(reshape2)
+library(caret)
+library(pROC)
+source("support_functions.R")
+options(knitr.table.format = "html") 
+```
+
+# Simulated Data
+```{r, echo=FALSE,warning=FALSE,message=FALSE,error=FALSE}
+# - for reproducibility, we fix the seed and the RNG for the R version we developed the example
+RNGversion("3.4.4")
+set.seed(3141)
+
+#- covariance structure for simulation (cols = rows = B, Agde, DAP and Y)
+new.cov <- matrix(  c(1.0, 0.2, 0.2, 0.75, 
+                      0.2, 1.0, 0.8, 0.0,
+                      0.2, 0.8, 1.0, 0.0,
+                      0.75, 0.2, 0.2, 1.0), ncol=4 )
+
+var.names <- c("B","Age","DAP","Y")
+rownames( new.cov ) <- colnames( new.cov) <- var.names
+
+# -- Generate some simulated data -- see "support_functions.R" for the details.
+sim.data <- GenSimulatedData( 400, new.cov )
+
+# -- Dichotomise the outcome into "0/1" classes -- this artificially simulates the clinical assessment / ground truth (in the validation/training data) by simply thresholding the value of Y
+df.raw <- GenSimDichot( sim.data )
+
+# - mean center and scale data to make working with Stan easier
+# - In this simulated data set, we'll use B (our simulated biomarker), Age and Duration of attenuated psychotic symptoms
+#   to make the example concrete
+df.2 <- scale( df.raw[, c("B","Age","DAP")], center = TRUE, scale = TRUE )
+
+df.center <- attr(df.2, "scaled:center")
+df.scale  <- attr(df.2, "scaled:scale")
+
+# - clean up after transforms
+df <- as.data.frame(df.2)
+df$Y <- df.raw$Y
+rm( df.2 )
+```
+
+To make the arguments that follow, we use a simulated data set -- and to situate in a clinical context -- we use the example of predicting 'caseness' of a psychotic disorder (Y) on the basis of a hypothetical biomarker (B), the patient's Age and duration of attenuated psychotic symptoms (DAP).  These labels aren't important, but simply make the simulations more relatable.
+
+We construct the simulated data such that the correlation between the biomarker, B, and the outcome Y is 0.75 but for Age and DAP, the correlation with Y is low at 0.2. We construct Age and DAP to be highly correlated such that older people tend to have longer DAP.  The outcome is a dichotomised "positive" and "negative" caseness -- this simulates the 'ground truth' clinical assessment. 
+
+This simulated data represents a realistic example with favourable conditions; the biomarker is strongly associated with outcome while the other variables have little assocation.
+
+The covariance matrix for the simulation is thus:
+
+```{r, echo = FALSE}
+cov.matrix <- data.frame( new.cov )
+new.cov %>%
+  kable(row.names = TRUE) %>%
+  kable_styling( full_width = FALSE )
+```
+
+In the simulated sample of 400, Y is represented as a binary variable which would usually represent the clinical 'ground truth' (e.g. each participant meets criteria for a psychotic disorder, or does not).  This is typical of the current literature.  Clinicians and patients understand binary categories: a patient "has" or "does not" have a disease, illness or disorder.  The discussion of whether mutually-exclusive assignment of binary 'caseness' is appropriate is important, but beyond the scope of this article.
+
+Model development and validation proceeds by simulating a sample from the population (e.g. using the covariance structure above), and then assuming that half of the data was collected and used for training, and the remaining are the testing (validation) set.  We have the ideal situation where the training and validation sample are from the same population.  This is the most trivial example of out-of-sample validation, but there is no loss of generality for the remaining demonstrations. 
+
+```{r, echo = FALSE}
+# - Development set using a 50/50 split
+dev.idx <- createDataPartition(df$Y, p = .5, 
+                               list = FALSE, 
+                               times = 1)
+
+# - segment and store the training and testing data sets
+train.df <- df[ dev.idx, ]
+test.df  <- df[ -dev.idx, ]
+```
+
+We have two separate and well-balanced 200 training and validation samples containing `r length( which( train.df$Y == 1 ) )` and `r length( which( test.df$Y == 1 ) )` positive cases respectively.
+
+
+# Model Training
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE,error=FALSE}
+
+# Fitting is done by code in support_functions.R using the model in logreg_model.stan
+# -- If you want to run the Stan model, then uncomment the following line:
+# TrainModel( train.df, test.df )
+
+# -- But as it's time consuming -- and Stan can be difficult to set up -- we've stored the results from a previous execution
+#    and include it here for convenience
+fit <- readRDS( "../Data/MCMC-output.rds" )
+
+# extract the posterior predictive distribution samples from the validation set to use in visualisations
+bayes.PY <- fit$PPD
+```
+
+We fit the logistic regression model using a contemporary variant of Markov Chain Monte Carlo (via the [Stan](https://mc-stan.org/) platform).  Using the Bayesian formulation of logistic regression is important because:
+
+  * it delivers a *distribution* of values for the parameters (Age, DAP and B or collectively, $\theta$) *given* the training data $D$ -- this is the posterior distribution of the parameters and denoted $p_{train} \left( \theta \mid D \right)$.  Here, $D$ is the training data consisting of pairs $(x,y)$ where $x$ are the values representing measurements of each patient's Age, DAP and biomarker, B with $y$ representing the patient's caseness (has, or does not have, a psychotic disorder). 
+  
+  * this posterior distribution of parameters explicitly captures uncertainty in the parameter estimates given the training data (and the model, in this case, a logistic regression where $y$ is modelled as a Bernoulli trial)
+  
+  * the more conventional maximum likelihood estimate for the parameters yields only a single (most likely) estimate for each parameter and means it is harder to explore the impact of model uncertainty on future predictions
+  
+Having access to posterior distributions means we can propagate uncertainty in the trained model explicitly in future predictions made with the model.  
+
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, error=FALSE, fig.align="center"}
+library(latex2exp)
+params.df <- data.frame( Intercept = as.numeric( fit$alpha ),
+                         Age = as.numeric( fit$beta_Age ),
+                         DAP = as.numeric( fit$beta_DAP ),
+                         B   = as.numeric( fit$beta_B )
+                         )
+
+params.melt.df <- reshape2::melt( params.df, measure.vars = c("Intercept","Age","DAP","B") )
+ggplot( params.melt.df, aes( value, fill = variable, stat(density) ) ) +
+  geom_histogram(binwidth = 0.1) +
+  geom_vline( xintercept = 0 ) +
+  facet_wrap( ~ variable ) +
+  ylab("Density") +
+  xlab(TeX("Estimated $\\theta$")) +
+  theme_minimal()
+
+# for an example later, we need the mode (maximum a posteriori) for the parameters
+param.hist <- hist( params.df$Intercept, plot = FALSE, breaks = seq(-5,5,by = 0.1) )
+  MAP.intercept <- param.hist$breaks[ which.max( param.hist$density) ]
+
+param.hist <- hist( params.df$Age, plot = FALSE, breaks = seq(-5,5,by = 0.1) )
+  MAP.Age <- param.hist$breaks[ which.max( param.hist$density) ]
+
+param.hist <- hist( params.df$DAP, plot = FALSE, breaks = seq(-5,5,by = 0.1) )
+  MAP.DAP <- param.hist$breaks[ which.max( param.hist$density) ]
+
+param.hist <- hist( params.df$B, plot = FALSE, breaks = seq(-5,5,by = 0.1) )
+  MAP.B <- param.hist$breaks[ which.max( param.hist$density) ]
+```
+The plot above shows the posterior distribution of each parameter (given the data, which was mean centered and scaled to unit variance).  Let $\theta_{0}$ be the 'intercept' parameter and $\theta_{B}$, $\theta_{Age}$ and $\theta_{DAP}$ be the estimated model parameters for the biomarker B, Age and DAP respectively. 
+
+Inspecting the plot, we can see that:
+
+  * For each parameter, the 'mass' of the distribution is centered (i.e. the mode) over the most likely value for the parameter and the dispersion (i.e. the 'width' of the distribution) is proportional to the uncertainty.  As an example, we can be confident that the parameter $\theta_{B}$ has a value of between 1.5 and 3.2 with the most likely value being around 2.2.
+  
+  * The posterior distributions allow one to directly answer questions such as "what is the probability that the intercept is effectively 0?" or "what is the probability that B (the coefficient for the biomarker) has a value great than 2?"
+  
+  * In contrast, a traditional (e.g. maximum likelihood) method would give us only a **single, point estimates** for the parameters for the intercept, Age, DAP and B. For example, the mode of the above distributions.  So, we would instead have discrete values $\theta_{0}=$ `r round( MAP.intercept, 1)`, $\theta_{B} =$ `r round( MAP.B, 1)`, $\theta_{Age} =$ `r round( MAP.Age, 1)` and $\theta_{DAP} =$ `r round( MAP.DAP, 1)`.
+
+# Making Predictions
+
+```{r, echo=FALSE,message=FALSE}
+# Define a sample patient to use as an example 
+pt.A.row <- data.frame( B = 0.2, Age = 0.9, DAP = 0.7)
+```
+
+To make the discussion of prediction concrete, we take a single new patient (not in the training set, $D$) for whom we want a prediction about their being a positive (conversely, a negative) case.  The patient has measured biomarker, Age and DAP (centered and scaled rather than in their original units) that we denote $x_{new}$ and we want the model to provide a continuous score $y_{new}$ that is proportional the probability the new patient is a positive case.   For any given patient, the continuous score $y_{new}$ will depend on the 'trained' model parameters $\theta$ and the values of the predictor variables $x_{new}$.
+
+In what follows, we will use a single new patient as an example, where the values $x_{new}$ are:
+
+```{r, echo=FALSE,message=FALSE}
+pt.A.row %>%
+  kable(row.names = FALSE) %>%
+  kable_styling( full_width = FALSE )
+```
+
+## Using Only Point-Estimates for Model Parameters
+
+```{r, echo = FALSE}
+# prob Y = 1 given patient and an instance of the parameters of the logistic regression model
+PrY1 <- function( beta_alpha, beta_B, beta_Age, beta_DAP, x_B, x_Age, x_DAP ) {
+  return(
+    1/( 1 + exp(-(beta_alpha + x_B * beta_B + x_Age * beta_Age + x_DAP * beta_DAP ) ))
+  )  
+}
+```
+
+To make a prediction, we would 'feed' these values for $x_{new}$ into the trained logistic regression model and obtain the continuous score $y_{new}$.  If we use the point estimates for the coefficients of the logistic model ($\theta_{0}$, $\theta_{B}$, $\theta_{Age}$ and $\theta_{DAP}$) we can make a prediction:
+
+$$
+\begin{aligned}
+  y_{new} &= \frac{1}{1+\exp \left( -(\theta_{0} + \theta_{B} B + \theta_{Age} Age + \theta_{DAP} DAP ) \right)} \\
+                     &= \frac{1}{1+\exp \left( -(-1.9 + 2.2 \times 0.2 + 0 \times 0.9 + 0.1 \times 0.7) \right)}
+\end{aligned}
+$$
+
+Resulting in $y_{new} =$ `r round( PrY1( MAP.intercept, MAP.B, MAP.Age, MAP.DAP, pt.A.row$B, pt.A.row$Age, pt.A.row$DAP ), 1 )`
+
+In this classical point-estimate approach, we end up with a **single continuous score** for the new patient but there is no accounting for model uncertainty.  Further there is no account of *observation uncertainty* if we equate the continuous score with the probability of $x_{new}$ being a positive case.  In the case of prediction, this is not unreasonable because by definition, logistic regression is designed to model the probability of an event (being a positive case) given the parameters and predictor variables. 
+
+We will return to this example shortly, but note that this continuous score $y_{new}$ (for any new patient) is then traditionally compared to an operating threshold to determine the 'caseness' (positive or negative) to obtain the familiar summary measures of performance such as sensitivity, specificity, accuracy and so on.  
+
+## Prediction Using the Posterior Distribution of Parameters
+
+Recall that the posterior distribution of parameters $p_{train} \left( \theta \mid D \right)$ contains information about the uncertainty in the model's parameter estimates and this can be propogated forward and inform our confidence in predictions for a given patient.  The model was trained using MCMC to deliver samples from the posterior distribution $p_{train} \left( \theta \mid D \right)$.  
+
+Predictions for new patients $\tilde{D}$ (e.g. in either validating the model, or deployment) arise from samples from the **posterior predictive distributions** (PPDs):
+
+$$
+  p(\tilde{D} \mid D) = \int p_{pred} \left( \tilde{D} \mid \theta \right) p_{train} \left( \theta \mid D \right) d\theta
+$$
+
+
+After training, we have access to $1 \ldots M$ samples from the posterior distribution $p_{train} \left( \theta \mid D \right)$ -- shown in the histograms above -- with a single sample denoted $\theta^{(m)}$:
+
+$$
+\theta^{(m)} \sim p_{train} \left( \theta \mid D\right)
+$$
+Using $\theta^{(m)}$ we then simulate a sample for $y_{new}$ -- the 'output' of the trained model for $x_{new}$ (a realisation of the new data, $\tilde{D}$):
+
+$$
+y^{(m)}_{new} \sim p_{pred} \left(x_{new} \mid \theta^{(m)}\right)
+$$
+
+And we can then visualise and summarise the resulting posterior distribution of $y^{(m)}_{new}$. 
+
+Using the concrete example for $x_{new}$ above, we proceed as follows:
+
+  1. Obtain a single sample of the model parameters $\theta^{(m)}$ from the posterior distribution of the parameters $p_{train} \left( \theta \mid D \right)$ -- in the diagram below, the black lines indicate one sample for each parameter (Intercept, Age, DAP and B)
+  
+```{r, echo = FALSE, fig.align = "center"}
+
+# get a sample from posterior p(theta|y) - we'll just take the first sample
+this.alpha <- fit$alpha[1]
+this.beta_B <- fit$beta_B[1]
+this.beta_Age <- fit$beta_Age[1]
+this.beta_DAP <- fit$beta_DAP[1]
+
+sample.line <- data.frame( variable = factor(c("Intercept", "Age", "DAP", "B")),
+                           Line.X = round( c(this.alpha, this.beta_Age, this.beta_DAP,this.beta_B), 2)
+)
+
+ggplot( params.melt.df, aes( value, fill = variable, stat(density) ) ) +
+  geom_histogram(binwidth = 0.1) +
+  facet_wrap( ~ variable ) +
+  geom_vline( data = sample.line, aes( xintercept = Line.X ), size = 1.0 ) +
+  geom_label( data = sample.line, aes( x = Line.X + 0.75, y = 1.35, label = Line.X, fill = NULL ) ) +
+  ylab("Density") +
+  xlab(TeX("Estimated $\\theta$")) +
+  theme_minimal() + theme(legend.position="none")
+```
+  
+  2. With this sample of the model parameters, 'run' the model with the new patient $x_{new}$ to obtain the continuous score $y^{(m)}_{new}$:
+  
+  $$
+    \begin{aligned}
+    y^{(m)}_{new} &= \frac{1}{1+\exp(-(\theta^{(m)}_{0} + \theta^{(m)}_{B} B + \theta^{(m)}_{Age} Age + \theta^{(m)}_{DAP} DAP ))} \\
+            &= \frac{1}{1+\exp(-(-1.78 + 2.38 \times 0.2 + (-0.13 \times 0.9) + 0.28 \times 0.7 ))} \\
+    \end{aligned}
+  $$
+  
+Yielding $y^{(m)}_{new}=$ `r round( PrY1( this.alpha, this.beta_B, this.beta_Age, this.beta_DAP, pt.A.row$B, pt.A.row$Age, pt.A.row$DAP ), 2 )`
+
+  3. Repeat 1) and 2) for all $\theta^{(m)}$
+  
+  4. Histogram the resulting $M$ values of $y^{(m)}_{new}$
+  
+
+For the case of the single patient above, this results in a distribution of the probability of being a positive case given the uncertainty in the model:
+
+```{r, echo = FALSE, fig.align= "center", warning=FALSE}
+# -- The code to implement this procedure is implemented and run in logreg_stan
+#    So after training the model, we get 8000 samples from the posterior distribution of parameters
+#    and a correponding number of samples from the posterior predictive distribution
+
+# - define a colour for patient A
+pt.A.col <- '#66c2a5'
+
+# the point prediction
+pt.estimate.A <- PrY1( MAP.intercept, MAP.B, MAP.Age, MAP.DAP, pt.A.row$B, pt.A.row$Age, pt.A.row$DAP )
+
+dist.pt.A <- data.frame( samples = rep( NA, nrow(fit$PPD) ) )
+for( m in 1:nrow(fit$PPD) ){
+  # get a sample from the posterior p(theta|D) and simulate sample from p_{pred}(d|theta)
+  dist.pt.A$samples[m] <- PrY1( fit$alpha[m], fit$beta_B[m], fit$beta_Age[m], fit$beta_DAP[m], pt.A.row$B, pt.A.row$Age, pt.A.row$DAP )
+}
+
+ggplot( dist.pt.A, aes( samples, stat(density) ) ) +
+  geom_histogram(binwidth = 0.01, fill =  "#bae4b3" ) +
+  ylab("Density") +
+  xlab(TeX("$y_{new}$")) +
+  xlim(0.0, 0.45) +
+  theme_minimal()
+
+# so we can later find the mode, we compute a histogram
+hist.pt.A <- hist( dist.pt.A$samples, breaks = seq(0,1,by = 0.01), plot = FALSE )
+
+```
+
+
+## Summary
+
+  * If we use only a point estimate of the model parameters (e.g. from a model trained by maximum likelihood) we can usually only obtain a single point estimate for the probability of any new patient being a positive case $y_{new}$
+  
+  * The Bayesian formulation yields a distribution of values for $y_{new}$ given the uncertainty in the posterior distribution of parameters $p_{train} \left( \theta \mid D \right)$
+
+# Decisions
+
+## Point Predictions and Dichotomising Decision Rules
+
+For a given new patient $x_{new}$ where we have a point estimate $y_{new}$ we can compare this to a cutoff (operating threshold) and obtain a discrete answer to the question "Is this new patient a positive or negative case?"
+
+This decision rule, $y_{new} > \mathrm{cutoff}$, assigns every new patient to a binary "yes" or "no" label. When validating the model, we want to know how well the model is performing.  We know the assignment of positive/negative cases in the validation set, so for example, if a patient from the validation sample is assigned "yes" by the decision rule -- when in fact the patient was a negative case -- this represents a false positive.  
+
+## Point Predictions using Bayesian Posterior Distributions
+In contrast, when we have samples $y^{(m)}_{new}$ (the histogram above) we require a summary of these values to declare a positive or negative case.  In Bayesian statistics, these point summaries are a consequence of the choice of *loss function* in a statistical decision-theoretic framework.  Common loss functions give rise to familiar summary statistics, for example:
+
+  * If we use a quadratic loss function, the summary *single* value for $y_{new}$ can be shown to be the expected value (mean) of $y^{(m)}_{new}$ which is `r round( mean( dist.pt.A$samples ), 3 )`
+  
+  * If we use a linear loss function we can define quantiles of $y^{(m)}_{new}$, the most familar being the median which is `r round( median( dist.pt.A$samples ), 3 )` 
+  
+  * If we use a zero-one loss function, the summary can be shown to be the mode of $y^{(m)}_{new}$ which is `r round( hist.pt.A$mids[ which.max( hist.pt.A$density ) ], 3 )`
+
+With these summary statistics, we can now apply the cutoff (decision rule) if we want to obtain a discrete 'yes'/'no' prediction.  However, as we show below, this may not be desirable when a predictive model is deployed clinically. 
+
+## Interval Predictions using Posterior Distributions
+We can also summarise the distribution of $y^{(m)}_{new}$ by making statements about uncertainty in the predicted value.  With reference to the example above, for a single patient $x_{new}$:
+
+  * This patient is likely negative, because the probability that the patient is a positive case is low -- the median predicted value $y_{new}$ is `r round( median( dist.pt.A$samples ), 2 )`
+  
+Given the model, we can estimate uncertainty on this prediction by computing a **credible interval** -- for example, the 80 percent (or 0.8) credible interval for the above patient's prediction is the number of samples $y^{(m)}_{new}$ in the quantile [0.1, 0.9]. The credible interval can be interpreted as:
+
+  * there is an 80% probability that the predicted value of $y_{new}$ is in the interval [`r round( quantile( dist.pt.A$samples, prob = c(0.1) ), 2 )`, `r round( quantile( dist.pt.A$samples, prob = c(0.9) ), 2 )`]
+
+The same information can be presented graphically as:
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE, error=FALSE, fig.align="center"}
+
+quants <- round( quantile( dist.pt.A$samples, prob = c(0.1, 0.9) ), 2 )
+
+hist.bar <- data.frame( x = hist.pt.A$mids, y = hist.pt.A$density )
+hist.bar$label <- factor( ifelse( hist.bar$x <= quants["90%"] & hist.bar$x >= quants["10%"], 1, 0  ) )
+
+bar.cols <- list("0" = "#bae4b3", "1" = "#74c476")
+
+ggplot( hist.bar, aes( x, y, fill = label ) ) +
+  geom_col(width = (0.01)) +
+  scale_fill_manual( values = bar.cols ) +
+  geom_vline( xintercept = round( median( dist.pt.A$samples ), 2), colour = "black", size = 1.5 ) +
+  geom_label( aes( x = quants["10%"], y = 0.0, label = quants["10%"], fill = NULL ) ) +
+  geom_label( aes( x = quants["90%"], y = 0.0, label = quants["90%"], fill = NULL ) ) +
+  ylab("Density") +
+  xlab(TeX("$y_{new}$")) +
+  xlim(0.0, 0.45) +
+  theme_minimal() + theme( legend.position = "none")
+
+
+```
+
+Where the darker shaded green area highlights the 80% credible interval and the black solid lines shows the median.
+
+# Summary Measures of Performance (SMP)
+
+In the preceding sections, we showed how using samples and simulations from posterior distributions allows propogation of model uncertainty into individual predictions in contrast to point summaries.  
+
+We now consider the classical SMP found in a majority of the literature on predictive models.  For each patient in the validation sample, the trained model yields a *continuous score* $y_{new}$ (in this case, the probability of a psychotic disorder given their Age, DAP and biomarker level, B).  This score is then compared to a *threshold* (the operating threshold, or 'cutoff') and then declared to be a positive (or negative) case.
+
+Most often, the classical SMP are derived using a cutoff found by locating the point on the receiver operating characteristic (ROC) curve that *maximises* the balance or tradeoff of true positives (sensitivity) against false positives (1-specificity) in the training or validation data set.  Here, we find the cutoff using the validation data because we want performance to be optimised (but not over-optimistic) on data not seen during training that we propose will be representative of patients seen when the algorithm is deployed.  Note, we also tried optimising the cutoff using the training set; this resulted in a lower operating threshold (approximately 0.29) and increased the SMP further e.g. AUROC = 0.91, sensitivity of 0.67, specificity of 0.81, balanced accuracy of 0.74 and Brier score of 0.14.  
+
+So, while we *have* access to samples representing the posterior distribution for each patient in the validation set, deriving a ROC curve *requires* that we obtain and use a single point prediction for each patient (i.e. to determine the true/false positives and negatives).  Taking the mean of the posterior samples $y^{(m)}_{new}$ for each patient's prediction, we can derive the following ROC curve and optimal operating threshold (cutoff):
+
+```{r, echo=FALSE,message=FALSE, fig.align= "center"}
+
+# Using the validation set, we now estimate the ROC curve and operating threshold
+
+# We need a point estimate of the probability of being a positive case so we'll just use the mean of the samples from the posterior distribution
+results.df <- data.frame( P.Y  = apply( bayes.PY, 2, mean ),
+                          Actual.Class  =  test.df$Y
+)
+
+# # Uncomment to use the training performance to estimate the ROC operating threshold -- this gives even better performance with a lower operating threshold
+# results.df <- data.frame( P.Y  = apply( fit$y_pred.train, 2, mean ),
+#                           Actual.Class  =  train.df$Y
+# )
+
+# Compute ROC and extract optimal threshold using Youden method
+test.roc  <- roc( results.df$Actual.Class, results.df$P.Y, quiet = TRUE )
+optimal.threshold <- coords(test.roc, "best", best.method = "youden", ret=c("threshold"))
+
+plot.roc( test.roc, legacy.axes = TRUE, print.thres = 'best')
+```
+
+
+```{r, echo = FALSE}
+
+# -- use the optimal operating threshold to derive a response 0/1
+results.df$Predicted.Class <- ifelse( results.df$P.Y >= round( optimal.threshold, 3 ), 1, 0 )
+
+## Uncomment if you want to try using the operating threshold derived from the training set to evaluate performance on the validation set
+# results.df <- data.frame( P.Y = apply( bayes.PY, 2, mean ),
+#                           Actual.Class = test.df$Y )
+# results.df$Predicted.Class <- ifelse( results.df$P.Y >= round( optimal.threshold, 3 ), 1, 0 )
+
+# -- and extract diagnostics for reporting:
+# -- Somers D_xy
+        d_xy <- somers2(results.df$Predicted.Class, results.df$Actual.Class)["Dxy"]
+# -- the AUROC ~= c statistic
+        auroc <- test.roc$auc
+# -- Brier score : 0 = best, 1 = worst
+        brier <- mean((results.df$P.Y - results.df$Actual.Class)^2)
+
+# -- convert the 0/1 labels to factor : Neg and Pos 
+results.df$Predicted.Class <- factor( results.df$Predicted.Class, levels = c("0","1"), labels = c("Neg","Pos") )
+results.df$Actual.Class    <- factor( results.df$Actual.Class, levels = c("0","1"), labels = c("Neg","Pos") )
+
+# -- compute confusion matrix
+cm <- confusionMatrix( results.df$Predicted.Class, results.df$Actual.Class, positive = "Pos" )
+
+# -- operating threshold 
+tau <- round( optimal.threshold, 3 )
+```
+
+With the optimal operating threshold (cutoff) fixed at `r tau`, we then derive and report the resulting validation set performance using the 'classic' SMP found in most of the literature:
+
+  * AUROC (area under the ROC curve) = `r round( as.numeric( auroc ), 2 )`
+  * Sensitivity of `r round( as.numeric( cm$byClass["Sensitivity"] ), 2 )` and a specificity of `r round( as.numeric( cm$byClass["Specificity"] ), 2 )`
+  * Balanced accuracy of `r round( as.numeric( cm$byClass["Balanced Accuracy"] ), 2 )`
+  * Somers' $D_{xy}$ of `r round(d_xy, 2)` (with -1 and +1 representing complete dis-agreement and complete agreement respectively, between model predictions and the validation set patient's actual caseness)
+  * Brier score of `r round( brier, 2)` (with 0 being the best, 1 being worst)
+
+Of all of these measures, only the Brier score uses the predicted continuous score $y_{new}$ for each patient in the validation set -- the others depend on first applying the decision rule $y_{new} > \mathrm{cutoff}$, where each case is predicted to be only positive (or negative).
+
+## Summary
+
+Summary measures of performance (SMP) attempt to capture the expected performance when the trained model is deployed with new (unseen) data, however:
+
+  * Most require a dichotomised (positive/negative) prediction -- the exception being the Brier score
+  
+  * Consequently, a point-prediction is required -- i.e. a single-valued summary of the posterior predictive distribution (e.g. the mean)
+  
+  * Information about model uncertainty -- contained in the posterior predictive distribution -- is therefore discarded and cannot be used when evaluating a prediction for an individual patient
+
+
+# Predictions for Deployment
+
+In the example above, according to the SMP, the predictive model achieved reasonable performance on the validation data, not seen during training.  On the basis of this, one might be persuaded of the clinical utility of a model.  We propose that when deployed in support of clinical decision making, the same measures and decision rules will obscure important information relevant to the patient and clinician. 
+
+To illustrate, we take 3 example patients (from the validation set) and explore how predictions are made using either point predictions (as is done with the SMP) and using the posterior distributions.
+
+
+```{r, echo = FALSE}
+# locations in arrays for patients in the validation set
+pt.A  <- 68
+pt.B  <- 33
+pt.C  <- 47
+
+# - define a colour for each patient
+pt.A.col <- '#66c2a5'
+pt.B.col <- '#8da0cb'
+pt.C.col <- '#f0027f'
+
+# The Stan MCMC model delivers sampling of the posteriors over the training set patients (to save time / having to repeat here)
+# -- extract posterior values for each of A, B and C
+pY.A <- bayes.PY[, pt.A ]
+pY.B <- bayes.PY[, pt.B ]
+pY.C <- bayes.PY[, pt.C ]
+```
+
+## Deployment : Point Predictions
+
+First, consider the information available when we submit three new patients (A, B and C) to the trained model and use the same point-predictions that are used to derive the SMP:
+
+```{r, echo = FALSE, fig.align="center"}
+
+point.pred <-  data.frame( P.Y = c( results.df$P.Y[ pt.A ],
+                                    results.df$P.Y[ pt.B ],
+                                    results.df$P.Y[ pt.C ] ),
+                           pt.label = c("A", "B", "C")
+)
+
+
+ggplot( ) +
+  geom_vline( xintercept = point.pred$P.Y[1], colour = pt.A.col, size = 2.0 ) +
+  geom_vline( xintercept = point.pred$P.Y[2], colour = pt.B.col, size = 2.0 ) +
+  geom_vline( xintercept = point.pred$P.Y[3], colour = pt.C.col, size = 2.0 ) +
+  geom_vline( xintercept = tau, colour = "red", linetype = 2 ) +
+  annotate( "label", x = point.pred$P.Y[1], y = 2.5, label = "A", size = 5.0) +
+  annotate( "label", x = point.pred$P.Y[2], y = 2.5, label = "B", size = 5.0) +
+  annotate( "label", x = point.pred$P.Y[3], y = 2.5, label = "C", size = 5.0) +
+  ylab("Density") +
+  xlab(TeX("$y$")) +
+  xlim(0,1.0) +
+  ylim(1, 5.0) +
+  theme_minimal() +
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+
+```
+
+Each patient is assigned a predicted value $y$ as shown in the plot above.  The red dotted line represents the optimal operating threshold (cutoff) that yielded the SMP reported for the trained model.  Using this scheme, we can state:
+
+  * Patient A : $y_{A} =$ `r round( point.pred$P.Y[1] ,3)` which is **less** than the cutoff `r tau` so Patient A is **negative**
+  * Patient B : $y_{B} =$ `r round( point.pred$P.Y[2] ,3)` which is **greater** than the cutoff `r tau` so Patient B is **positive**
+  * Patient C : $y_{C} =$ `r round( point.pred$P.Y[3] ,3)` which is **greater** than the cutoff `r tau` so Patient C is **positive**
+
+It is clear that for Patient B, the margin is narrow : $y_{B}$ is greater than the threshold by only around `r round(point.pred$P.Y[2] - tau, 3)`.
+
+This illustrates that dichotomising the prediction (using the decision rule $y_{new} > \mathrm{cutoff}$ as we required to derive the SMP) discards information contained in the actual prediction delivered by the trained model.  There is no accounting for uncertainty.
+
+
+## Deployment : Posterior Distributions
+Instead of taking a single point prediction, we now repeat the process outlined in Section 4.3 for the 3 new patients, A, B and C. The posterior distributions are:
+
+```{r, echo = FALSE, messages = FALSE, warning=FALSE }
+# -- generate three "separate" plots of the posterior distributions
+#    these are used in the actual paper (not this document)
+theme_inset <- function (base_size = 28, base_family = "sans", 
+                         base_line_size = base_size/22, 
+                         base_rect_size = base_size/22) {
+      
+  theme_bw(base_size = base_size, base_family = base_family, 
+           base_line_size = base_line_size, base_rect_size = base_rect_size) %+replace% 
+    
+  theme(legend.position="none",
+        axis.ticks.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.text.x = element_text(color = "grey20", size = 55, vjust = -6),
+        plot.title = element_text(size = 60, hjust=0.1, face = "bold"),
+        panel.border = element_blank(),  
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+        plot.margin=unit(c(0,1.0,0,0),"cm"),
+        axis.line = element_line(colour = "black", size = rel(1)), 
+                                 legend.key = element_blank(), 
+                                 strip.background = element_rect(fill = "white", 
+                                                                 colour = "black", 
+                                                                 size = rel(2)), 
+        complete = TRUE)
+}
+
+
+df.3 <- data.frame( A = bayes.PY[ , pt.A ],
+                    B = bayes.PY[ , pt.B ],
+                    C = bayes.PY[ , pt.C ] )
+
+hist.pt.A <- ggplot(df.3) + geom_histogram( aes(A), binwidth = 0.01, fill = pt.A.col ) +
+               scale_x_continuous(breaks = c(0,1), limits = c(0,1), labels = c("0\n-ve","1\n+ve") ) +
+               geom_vline(aes(xintercept=tau), colour="black", linetype="solid", size = 5.0) + 
+               ggtitle(label = "A") +
+               xlab("") + ylab("") +
+               theme_inset()
+
+hist.pt.B <- ggplot(df.3) + geom_histogram( aes(B), binwidth = 0.01, fill = pt.B.col ) +
+               scale_x_continuous(breaks = c(0,1), limits = c(0,1), labels = c("0\n-ve","1\n+ve") ) +
+               geom_vline(aes(xintercept=tau), colour="black", linetype="solid", size = 5.0) + 
+               ggtitle(label = "B") +
+               xlab("") + ylab("") +
+               theme_inset()
+
+hist.pt.C <- ggplot(df.3) + geom_histogram( aes(C), binwidth = 0.01, fill = pt.C.col ) +
+               scale_x_continuous(breaks = c(0,1), limits = c(0,1), labels = c("0\n-ve","1\n+ve") ) +
+               geom_vline(aes(xintercept=tau), colour="black", linetype="solid", size = 5.0) + 
+               ggtitle(label = "C") +
+               xlab("") + ylab("") +
+               theme_inset()
+
+
+png( '../Figures/pt.A.hist.png' )
+  print( hist.pt.A )
+  invisible( dev.off() )
+
+png( '../Figures/pt.B.hist.png' )
+  print( hist.pt.B )
+  invisible( dev.off() )
+
+png( '../Figures/pt.C.hist.png' )
+  print( hist.pt.C )
+  invisible( dev.off() )
+
+```
+
+```{r, echo = FALSE, fig.align="center"}
+# Display for online reading of this document
+
+# -- 
+
+ggplot( df.3 ) +
+  geom_histogram( aes(A, stat(density)), binwidth = 0.01, fill = pt.A.col, alpha = 0.7 ) +
+  geom_histogram( aes(B, stat(density)), binwidth = 0.01, fill = pt.B.col, alpha = 0.7 ) +
+  geom_histogram( aes(C, stat(density)), binwidth = 0.01, fill = pt.C.col, alpha = 0.7 ) +
+  # -- add in the operating threshold
+  geom_vline( xintercept = tau, colour = "red", linetype = 2 ) +
+  annotate( "label", x = median(df.3$A), y = 2.5, label = "A", size = 5.0) +
+  annotate( "label", x = median(df.3$B), y = 2.5, label = "B", size = 5.0) +
+  annotate( "label", x = median(df.3$C), y = 2.5, label = "C", size = 5.0) +
+  ylab("Density") +
+  xlab(TeX("$y_{new}$")) +
+  theme_minimal() 
+```
+
+The red dotted line again shows the cutoff used to derive the SMP quoted above.
+
+Now, we can answer the following questions relevant to the predictions for each patient using quantiles of $y^{(m)}$ for A, B, and C:
+
+  * The **probability** that Patient A is **positive** is the number of samples $y^{(m)}_{A}$ greater than the cutoff = `0` -- it can clearly be seen that the mass of the posterior distribution for A is concentrated far below the cutoff.
+  * The **probability** that Patient B is **positive** is the number of samples $y^{(m)}_{B}$ greater than the cutoff = `r round( length( which( df.3$B > tau ) ) / length( df.3$B ), 3)`
+  * The **probability** that Patient C is **positive** is the number of samples $y^{(m)}_{C}$ greater than the cutoff = `0`
+  
+
+Alternatively, we can answer questions about the credible interval (here, the 80% interval) for the probabilities of being positive:
+
+  * For Patient A, there is an **80% probability** that the predicted value of being positive is between [`r round( quantile( df.3$A, prob = c(0.1, 0.9) )[1], 3)`, `r round( quantile( df.3$A, prob = c(0.1, 0.9) )[2], 3)`]
+  * For Patient B, there is an **80% probability** that the predicted value of being positive is between [`r round( quantile( df.3$B, prob = c(0.1, 0.9) )[1], 3)`, `r round( quantile( df.3$B, prob = c(0.1, 0.9) )[2], 3)`]
+  * For Patient C, there is an **80% probability** that the predicted value of being positive is between [`r round( quantile( df.3$C, prob = c(0.1, 0.9) )[1], 3)`, `r round( quantile( df.3$C, prob = c(0.1, 0.9) )[2], 3)`]
+  
+Any treatment decision for Patient B should account for the obvious uncertainty in the trained model's prediction for them.  
+
+## Summary
+
+  * The measures used to derive SMP discard information contained in the posterior predictive distribution
+  * When using a dichotomising decision rule, there are cases where prediction uncertainty is directly relevant (for example, those near the cutoff)
+
+# Visualising Overall Accuracy for Predictions
+In the preceding sections, we've addressed the differences between point predictions, dichotomising decision rules and using the 'full' posterior distribution for new individual patients.
+
+We might still require an illustration of how predictions from the trained model compare over a population sample.  Traditionally, the **calibration curve** has been used to display this information.  A calibration curve is constructed by scatterplotting the validation data as follows:
+
+  * on the horizontal axis, plot the **predicted** values for each case -- i.e. those obtained from the trained model
+  * on the vertical axis, for each case, plot the **actual** probability of being positive
+  * fit a smoothing curve through the scatterplot
+  * "perfect" calibration is the straight 45-degree diagonal line from (0,0) to (1,1)
+  
+## Calibration for Point Predictions
+Here, we show the calibration curve for the point-prediction version of the model:
+
+```{r, echo = FALSE, fig.align= "center"}
+
+actual.Y <- ifelse( results.df$Actual.Class == "Pos",1,0 )
+
+point.calib.df <- data.frame( pred.Y = results.df$P.Y,
+                              actual.Y = actual.Y  )
+smooth.value <- 2
+
+point.calib <- Calibrate.Lowess( point.calib.df$actual.Y, point.calib.df$pred.Y, 1, smooth.value )
+
+ggplot( ) +
+  coord_fixed( xlim = c(0.0, 1.0), ylim = c(0, 1.0), ratio = 1.0 ) +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1.0), limits = c(0, 1.0), expand = c(0,0) ) +
+  scale_x_continuous(breaks = c(0.25, 0.5, 0.75, 1.0), limits = c(0, 1.0), expand = c(0,0) ) +
+  xlab("\nAlgorithm Predicted Probability") +
+  ylab("Actual Probability \n") + 
+
+  # the perfect calibration line
+  annotate(x = 0.0, xend=1.0, y=0, yend=1.0, colour="black", lwd=0.75, geom="segment" ) +
+  
+  # the three example patients
+  annotate("segment", x = point.pred$P.Y[1], xend = point.pred$P.Y[1] , y = 0, yend = 1.0, colour = pt.A.col, size = 1.5, lineend = "round") +
+  annotate("segment", x = point.pred$P.Y[2], xend = point.pred$P.Y[2], y = 0, yend = 1.0, colour = pt.B.col, size = 1.5, lineend = "round") +
+  annotate("segment", x = point.pred$P.Y[3], xend = point.pred$P.Y[3], y = 0, yend = 1.0, colour = pt.C.col, size = 1.5, lineend = "round") +
+
+    # add in cutoff 
+  annotate(x = tau, xend=tau, y=0, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
+  annotate(x = 0, xend=tau, y=tau, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
+    
+  # the calibration curve
+  geom_line( data = point.calib, 
+             mapping = aes( x = Pred.Y, y = P.Y ), alpha = 1.0, colour = "#fc9272", size = 1.0 ) +
+  
+  theme_minimal()
+  
+
+```
+
+Inspecting the calibration plot, we can see that:
+
+  * When the model predicts that the probability of being positive is **low** (to the left of the horizontal axis), in the validation set, the actual probability is marginally higher -- the model is under-estimating the probability of being positive
+  * To the right of the horizontal axis, when the model is predicting the probability of being positive is **high**, in the validation set, the actual probability is somewhat lower -- the model is over-estimating the probability of being positive
+  * Near the decision-rule cutoff of `r tau` (the red dotted lines) the model appears well-calibrated
+
+The coloured vertical lines correspond to the point predictions for patient A, B and C.
+
+
+## Calibration Plot incorporating Uncertainty in the Model
+
+When making individual predictions we propogated uncertainty in the trained model using the posterior distribution of the parameters and showed how credible intervals can be located for the predicted probabilities.
+
+We can similarly visualise uncertainty in calibration by constructing a calibration curve for *each* of the $M$ samples $\theta^{(m)}$ from $p_{train} \left( \theta \mid D \right)$.  
+
+The procedure is as follows:
+
+  1. Take a sample of the parameters $\theta^{(m)} \sim p_{train} \left( \theta \mid D\right)$  -- for example, in Section 3.2, we took a sample for the parameters (intercept, Age, B and DAP) where $\theta_{0}=$ `r round( this.alpha, 2)`, $\theta_{Age}=$ `r round( this.beta_Age, 2)`, $\theta_{B}=$ `r round( this.beta_B, 2)` and $\theta_{DAP}=$ `r round( this.beta_DAP, 2)`
+        
+  2. With this parameter sample, compute the calibration curve **for every** patient in the validation set $\tilde{D}$
+  
+```{r, echo = FALSE, fig.align="center" }
+
+calib.theta.m <- data.frame( pred.Y = rep( NA, ncol(fit$PPD) ),
+                             actual.Y = test.df$Y )
+
+for( j in 1:nrow(calib.theta.m) ){
+  # with a single (fixed) sample theta^(m), compute predictions over all patients in validation set
+  calib.theta.m$pred.Y[j] <- PrY1( this.alpha, this.beta_B, this.beta_Age, this.beta_DAP, test.df$B[j], test.df$Age[j], test.df$DAP[j] )
+}
+
+point.calib.theta.m <- Calibrate.Lowess( calib.theta.m$actual.Y, calib.theta.m$pred.Y, 1, smooth.value )
+
+ggplot( ) +
+  coord_fixed( xlim = c(0.0, 1.0), ylim = c(0, 1.0), ratio = 1.0 ) +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1.0), limits = c(0, 1.0), expand = c(0,0) ) +
+  scale_x_continuous(breaks = c(0.25, 0.5, 0.75, 1.0), limits = c(0, 1.0), expand = c(0,0) ) +
+  xlab("\nAlgorithm Predicted Probability") +
+  ylab("Actual Probability \n") + 
+
+  # the perfect calibration line
+  annotate(x = 0.0, xend=1.0, y=0, yend=1.0, colour="black", lwd=0.75, geom="segment" ) +
+  
+  # # the three example patients
+  # annotate("segment", x = point.pred$P.Y[1], xend = point.pred$P.Y[1] , y = 0, yend = 1.0, colour = pt.A.col, size = 1.5, lineend = "round") +
+  # annotate("segment", x = point.pred$P.Y[2], xend = point.pred$P.Y[2], y = 0, yend = 1.0, colour = pt.B.col, size = 1.5, lineend = "round") +
+  # annotate("segment", x = point.pred$P.Y[3], xend = point.pred$P.Y[3], y = 0, yend = 1.0, colour = pt.C.col, size = 1.5, lineend = "round") +
+
+    # add in cutoff 
+  annotate(x = tau, xend=tau, y=0, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
+  annotate(x = 0, xend=tau, y=tau, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
+    
+  # the calibration curve
+  geom_line( data = point.calib.theta.m, 
+             mapping = aes( x = Pred.Y, y = P.Y ), alpha = 1.0, colour = "#fc9272", size = 1.0 ) +
+  
+  theme_minimal()
+
+
+```
+
+  3. Repeat steps 1 and 2 to derive and plot the calibration curve for all $M$ samples $\theta^{(m)}$
+
+```{r, echo = FALSE}
+ComputeMedian <- function( X ) {
+   Q <- quantile(X, probs = c(0.1,0.5,0.9) )
+   return( c( med = Q[[2]], lower = Q[[1]], upper = Q[[3]] ) )
+ }
+
+ # -- for each of the 200 validation cases, compute the median and the 0.1 and 0.9 quantiles
+ m.h <- round( as.data.frame( t( apply( bayes.PY, 2, ComputeMedian ) ) ), 3 )
+
+ # -- now, we can use the medians (and upper / lower quantiles) to compute the range of calibration
+
+ this.calib       <- Calibrate.Lowess( actual.Y, m.h$med, 1, smooth.value )
+ this.calib.upper <- Calibrate.Lowess( actual.Y, m.h$upper, 1, smooth.value )
+ this.calib.lower <- Calibrate.Lowess( actual.Y, m.h$lower, 1, smooth.value )
+
+ calib.quant <- data.frame( Pred.Y = this.calib$Pred.Y, P.Y = this.calib$P.Y,
+                         lo.x = this.calib.lower$Pred.Y, lo.y = this.calib.lower$P.Y,
+                         hi.x = this.calib.upper$Pred.Y, hi.y = this.calib.upper$P.Y )
+```
+
+
+```{r, echo = FALSE}
+med.A <- median( bayes.PY[ , pt.A ] )
+med.B <- median( bayes.PY[ , pt.B ] )
+med.C <- median( bayes.PY[ , pt.C ] )
+
+calib.list <- vector("list", nrow( bayes.PY ) )
+
+# - to make the plot more readable, we 'thin' the samples (and their calib curves)
+thinning.factor <- 10
+
+for (i in seq( 1, nrow( bayes.PY), by = thinning.factor ) ) {
+  # -- for one sample from the predictive distribution for all patients
+  this.calib <- Calibrate.Lowess( actual.Y, bayes.PY[i,], 1, smooth.value )
+  this.calib$id <- i
+  calib.list[[i]] <- this.calib
+}
+
+# concatenate into one huge data frame
+calib.df <- do.call( rbind, calib.list )
+
+```
+
+```{r, echo = FALSE, warning=FALSE}
+# -- Construct the 'giant' plot for the paper
+# Load back the histograms and put in as grobs
+img.pt.A <- readPNG("../Figures/pt.A.hist.png")
+img.pt.B <- readPNG("../Figures/pt.B.hist.png")
+img.pt.C <- readPNG("../Figures/pt.C.hist.png")
+
+inset.size <- 0.3
+common.inset.y <- 1.05
+
+calib.spag.p <- ggplot( ) +
+
+  coord_fixed( xlim = c(0.0, 1.2), ylim = c(0, 1.5), ratio = 1.0 ) +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1.0), limits = c(0, 1.0), expand = c(0,0) ) +
+  scale_x_continuous(breaks = c(0.25, 0.5, 0.75, 1.0), limits = c(0, 1.0), expand = c(0,0) ) +
+  xlab("\nAlgorithm Predicted Probability") +
+  ylab("Actual Probability \t\t\t\t\t\n") + 
+  
+  annotation_custom(rasterGrob(img.pt.A,
+                               width = unit(1,"npc"),
+                               height = unit(1,"npc")),
+                    #0.04, 0.04 + inset.size, 1.1, 1.1 + inset.size) +
+                    0.00, 0.00 + inset.size, common.inset.y, common.inset.y + inset.size) +
+
+  annotation_custom(rasterGrob(img.pt.B,
+                               width = unit(1,"npc"),
+                               height = unit(1,"npc")),
+                    0.3, 0.3 + inset.size, common.inset.y, common.inset.y + inset.size) +
+
+  annotation_custom(rasterGrob(img.pt.C,
+                               width = unit(1,"npc"),
+                               height = unit(1,"npc")),
+                    0.8, 0.8+inset.size, common.inset.y, common.inset.y + inset.size) +
+
+
+  geom_line( data = calib.df, 
+             mapping = aes( x = Pred.Y, y = P.Y, group = id ), alpha = 0.05, colour = "#fc9272", size = 0.5 ) + 
+  
+  geom_line( data = calib.quant, mapping = aes( x = hi.x, y = hi.y ), 
+             colour = "black", size = 0.5, linetype = 2 ) +
+  
+  geom_line( data = calib.quant, mapping = aes( x = lo.x, y = lo.y ), 
+             colour = "black", size = 0.5, linetype = 2 ) +
+  
+  # add in segment annotation for patient A,B and C mode and HDI
+  annotate("segment", x = med.A, xend = med.A, y = 0, yend = 1.0, colour = pt.A.col, size = 1.5, lineend = "round") +
+  annotate("segment", x = med.B, xend = med.B, y = 0, yend = 1.0, colour = pt.B.col, size = 1.5, lineend = "round") +
+  annotate("segment", x = med.C, xend = med.C, y = 0, yend = 1.0, colour = pt.C.col, size = 1.5, lineend = "round") +
+
+  # add axes and perfect calibration lines in explicitly as annotations
+  annotate(x = 0.0, xend=1.0, y=0, yend=0, colour="black", lwd=0.75, geom="segment") +
+  annotate(x = 0.0, xend=0.0, y=0, yend=1.0, colour="black", lwd=1.5, geom="segment") +
+  annotate(x = 0.0, xend=1.0, y=0, yend=1.0, colour="black", lwd=0.75, geom="segment" ) +
+
+  
+  theme_bw() +
+  theme( axis.text=element_text(size=18),
+         axis.title=element_text(size=20,face="bold"),
+         panel.grid.major = element_blank(), 
+         panel.grid.minor = element_blank(),
+         panel.border = element_blank() )
+  
+png( '../Figures/composite_diag1.png', width = 800, height = 800, units = "px" )
+  print( calib.spag.p )
+  invisible( dev.off() )
+
+```
+
+```{r, echo = FALSE, fig.align="center", warning=FALSE}
+# the online version
+ggplot( ) +
+  coord_fixed( xlim = c(0.0, 1.0), ylim = c(0, 1.0), ratio = 1.0 ) +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5, 0.75, 1.0), limits = c(0, 1.0), expand = c(0,0) ) +
+  scale_x_continuous(breaks = c(0.25, 0.5, 0.75, 1.0), limits = c(0, 1.0), expand = c(0,0) ) +
+  xlab("\nAlgorithm Predicted Probability") +
+  ylab("Actual Probability \n") + 
+  geom_line( data = calib.df, 
+             mapping = aes( x = Pred.Y, y = P.Y, group = id ), alpha = 0.05, colour = "#fc9272", size = 0.5 ) + 
+  
+  geom_line( data = calib.quant, mapping = aes( x = hi.x, y = hi.y ), 
+             colour = "black", size = 0.5, linetype = 2 ) +
+  
+  geom_line( data = calib.quant, mapping = aes( x = lo.x, y = lo.y ), 
+             colour = "black", size = 0.5, linetype = 2 ) +
+  
+  # add in segment annotation for patient A,B and C mode and HDI
+  annotate("segment", x = med.A, xend = med.A, y = 0, yend = 1.0, colour = pt.A.col, size = 1.5, lineend = "round") +
+  annotate("segment", x = med.B, xend = med.B, y = 0, yend = 1.0, colour = pt.B.col, size = 1.5, lineend = "round") +
+  annotate("segment", x = med.C, xend = med.C, y = 0, yend = 1.0, colour = pt.C.col, size = 1.5, lineend = "round") +
+
+  # add in cutoff 
+  annotate(x = tau, xend=tau, y=0, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
+  annotate(x = 0, xend=tau, y=tau, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
+  
+  # add perfect calibration line 
+  annotate(x = 0.0, xend=1.0, y=0, yend=1.0, colour="black", lwd=0.75, geom="segment" ) +
+  theme_minimal()
+  
+
+
+```
+
+In addition to the spaghetti plot of individual calibration curves, the black dotted line shows the 80% credible interval of the calibration curves and we have plotted the median of the predictive distribution for the three example patients (A, B and C).
+
+In contrast to the point-prediction calibration we can see that:
+
+  * For negative cases toward the left of the horizontal axis, the model systematically under-estimates the actual probabilities but fairly consistently 
+  * Near the cutoff, there is substantial variation in the calibration when we account for uncertainty in the model
+  * For positive cases toward the right of the horizontal axis, the model systematically over-estimates the actual probabilities but again, fairly consistently 
+
+When we have an individual prediction for a new patient, we can not only see the uncertainty in the model's prediction (as in Section 6.2), but can compare that prediction with the model's overall calibration for other patients (in the validation set) with similar predictions.  
+
