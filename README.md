@@ -37,6 +37,4 @@ and to install the following R packages:
   * pROC
  
 To run the Stan code, you will also need to install and configure [Stan](https://mc-stan.org/)
-
-Note that output from 
  
