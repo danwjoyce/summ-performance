@@ -4,7 +4,9 @@ This repository contains the code, data and an R markdown document for recreatin
 
 ## Getting Started
 
-Download the repository; you should find three directories:
+To read the extended example and walkthrough : open the `revised_predictive_decisions.pdf`
+
+Alternatively, download the repository; you should find three directories:
 
   1. `Code` -- contains the tutorial/walkthrough as an `html` file, the corresponding R markdown notebook and supplementary R code to use the notebook
   2. `Data` -- sample simulation data (including output from Stan / MCMC fitting of the model)
