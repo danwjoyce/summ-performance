@@ -4,8 +4,8 @@ author: "Dan W Joyce"
 date: "10th October 2019"
 output:
   html_document:
-    df_print: paged
-    number_sections: true
+    number_sections: yes
+  pdf_document: default
 header-includes: \usepackage{caption}
 ---
 
@@ -75,8 +75,9 @@ The covariance matrix for the simulation is thus:
 ```{r, echo = FALSE}
 cov.matrix <- data.frame( new.cov )
 new.cov %>%
-  kable(row.names = TRUE) %>%
-  kable_styling( full_width = FALSE )
+ kable(row.names = TRUE) %>%
+ kable_styling( full_width = FALSE )
+# cov.matrix
 ```
 
 In the simulated sample of 400, Y is represented as a binary variable which would usually represent the clinical 'ground truth' (e.g. each participant meets criteria for a psychotic disorder, or does not).  This is typical of the current literature.  Clinicians and patients understand binary categories: a patient "has" or "does not" have a disease, illness or disorder.  The discussion of whether mutually-exclusive assignment of binary 'caseness' is appropriate is important, but beyond the scope of this article.
@@ -176,9 +177,12 @@ To make the discussion of prediction concrete, we take a single new patient (not
 In what follows, we will use a single new patient as an example, where the values $x_{new}$ are:
 
 ```{r, echo=FALSE,message=FALSE}
+
 pt.A.row %>%
   kable(row.names = FALSE) %>%
   kable_styling( full_width = FALSE )
+
+# pt.A.row
 ```
 
 ## Using Only Point-Estimates for Model Parameters
