@@ -1,11 +1,11 @@
 ---
 title: "Summary Measures of Performance for Predictive Models"
 author: "Dan W Joyce"
-date: "10th October 2019"
+date: "20th October 2019"
 output:
+  pdf_document: default
   html_document:
     number_sections: yes
-  pdf_document: default
 header-includes: \usepackage{caption}
 ---
 
@@ -74,10 +74,10 @@ The covariance matrix for the simulation is thus:
 
 ```{r, echo = FALSE}
 cov.matrix <- data.frame( new.cov )
-new.cov %>%
- kable(row.names = TRUE) %>%
- kable_styling( full_width = FALSE )
-# cov.matrix
+# new.cov %>%
+#  kable(row.names = TRUE) %>%
+#  kable_styling( full_width = FALSE )
+cov.matrix
 ```
 
 In the simulated sample of 400, Y is represented as a binary variable which would usually represent the clinical 'ground truth' (e.g. each participant meets criteria for a psychotic disorder, or does not).  This is typical of the current literature.  Clinicians and patients understand binary categories: a patient "has" or "does not" have a disease, illness or disorder.  The discussion of whether mutually-exclusive assignment of binary 'caseness' is appropriate is important, but beyond the scope of this article.
@@ -178,11 +178,11 @@ In what follows, we will use a single new patient as an example, where the value
 
 ```{r, echo=FALSE,message=FALSE}
 
-pt.A.row %>%
-  kable(row.names = FALSE) %>%
-  kable_styling( full_width = FALSE )
+# pt.A.row %>%
+#   kable(row.names = FALSE) %>%
+#   kable_styling( full_width = FALSE )
 
-# pt.A.row
+pt.A.row
 ```
 
 ## Using Only Point-Estimates for Model Parameters
@@ -341,7 +341,7 @@ We can also summarise the distribution of $y^{(m)}_{new}$ by making statements a
   
 Given the model, we can estimate uncertainty on this prediction by computing a **credible interval** -- for example, the 80 percent (or 0.8) credible interval for the above patient's prediction is the number of samples $y^{(m)}_{new}$ in the quantile [0.1, 0.9]. The credible interval can be interpreted as:
 
-  * there is an 80% probability that the predicted value of $y_{new}$ is in the interval [`r round( quantile( dist.pt.A$samples, prob = c(0.1) ), 2 )`, `r round( quantile( dist.pt.A$samples, prob = c(0.9) ), 2 )`]
+  * there is an 80% probability that the value of $y_{new}$ is in the interval [`r round( quantile( dist.pt.A$samples, prob = c(0.1) ), 2 )`, `r round( quantile( dist.pt.A$samples, prob = c(0.9) ), 2 )`]
 
 The same information can be presented graphically as:
 
@@ -494,7 +494,7 @@ ggplot( ) +
   geom_vline( xintercept = point.pred$P.Y[1], colour = pt.A.col, size = 2.0 ) +
   geom_vline( xintercept = point.pred$P.Y[2], colour = pt.B.col, size = 2.0 ) +
   geom_vline( xintercept = point.pred$P.Y[3], colour = pt.C.col, size = 2.0 ) +
-  geom_vline( xintercept = tau, colour = "red", linetype = 2 ) +
+  geom_vline( xintercept = tau, colour = "black", linetype = 2 ) +
   annotate( "label", x = point.pred$P.Y[1], y = 2.5, label = "A", size = 5.0) +
   annotate( "label", x = point.pred$P.Y[2], y = 2.5, label = "B", size = 5.0) +
   annotate( "label", x = point.pred$P.Y[3], y = 2.5, label = "C", size = 5.0) +
@@ -509,7 +509,7 @@ ggplot( ) +
 
 ```
 
-Each patient is assigned a predicted value $y$ as shown in the plot above.  The red dotted line represents the optimal operating threshold (cutoff) that yielded the SMP reported for the trained model.  Using this scheme, we can state:
+Each patient is assigned a predicted value $y$ as shown in the plot above (note, the point-predictions shown are in fact the means of the full posterior distributions, discussed in Section 6.2 below).  The black dotted line represents the optimal operating threshold (cutoff) that yielded the SMP reported for the trained model.  Using this scheme, we can state:
 
   * Patient A : $y_{A} =$ `r round( point.pred$P.Y[1] ,3)` which is **less** than the cutoff `r tau` so Patient A is **negative**
   * Patient B : $y_{B} =$ `r round( point.pred$P.Y[2] ,3)` which is **greater** than the cutoff `r tau` so Patient B is **positive**
@@ -526,7 +526,7 @@ Instead of taking a single point prediction, we now repeat the process outlined 
 ```{r, echo = FALSE, messages = FALSE, warning=FALSE }
 # -- generate three "separate" plots of the posterior distributions
 #    these are used in the actual paper (not this document)
-theme_inset <- function (base_size = 28, base_family = "sans", 
+theme_inset <- function (base_size = 28, base_family = "Helvetica", 
                          base_line_size = base_size/22, 
                          base_rect_size = base_size/22) {
       
@@ -557,21 +557,21 @@ df.3 <- data.frame( A = bayes.PY[ , pt.A ],
 
 hist.pt.A <- ggplot(df.3) + geom_histogram( aes(A), binwidth = 0.01, fill = pt.A.col ) +
                scale_x_continuous(breaks = c(0,1), limits = c(0,1), labels = c("0\n-ve","1\n+ve") ) +
-               geom_vline(aes(xintercept=tau), colour="black", linetype="solid", size = 5.0) + 
+               geom_vline(aes(xintercept=tau), colour="black", linetype=2, size = 4.0) + 
                ggtitle(label = "A") +
                xlab("") + ylab("") +
                theme_inset()
 
 hist.pt.B <- ggplot(df.3) + geom_histogram( aes(B), binwidth = 0.01, fill = pt.B.col ) +
                scale_x_continuous(breaks = c(0,1), limits = c(0,1), labels = c("0\n-ve","1\n+ve") ) +
-               geom_vline(aes(xintercept=tau), colour="black", linetype="solid", size = 5.0) + 
+               geom_vline(aes(xintercept=tau), colour="black", linetype=2, size = 4.0) + 
                ggtitle(label = "B") +
                xlab("") + ylab("") +
                theme_inset()
 
 hist.pt.C <- ggplot(df.3) + geom_histogram( aes(C), binwidth = 0.01, fill = pt.C.col ) +
                scale_x_continuous(breaks = c(0,1), limits = c(0,1), labels = c("0\n-ve","1\n+ve") ) +
-               geom_vline(aes(xintercept=tau), colour="black", linetype="solid", size = 5.0) + 
+               geom_vline(aes(xintercept=tau), colour="black", linetype=2, size = 4.0) + 
                ggtitle(label = "C") +
                xlab("") + ylab("") +
                theme_inset()
@@ -589,6 +589,12 @@ png( '../Figures/pt.C.hist.png' )
   print( hist.pt.C )
   invisible( dev.off() )
 
+# # EPS version for journal
+# ggsave( hist.pt.A, file="../Figures/pt.A.hist.eps", device="eps", dpi = "print")
+# ggsave( hist.pt.B, file="../Figures/pt.B.hist.eps", device="eps", dpi = "print")
+# ggsave( hist.pt.C, file="../Figures/pt.C.hist.eps", device="eps", dpi = "print")
+
+  
 ```
 
 ```{r, echo = FALSE, fig.align="center"}
@@ -601,7 +607,7 @@ ggplot( df.3 ) +
   geom_histogram( aes(B, stat(density)), binwidth = 0.01, fill = pt.B.col, alpha = 0.7 ) +
   geom_histogram( aes(C, stat(density)), binwidth = 0.01, fill = pt.C.col, alpha = 0.7 ) +
   # -- add in the operating threshold
-  geom_vline( xintercept = tau, colour = "red", linetype = 2 ) +
+  geom_vline( xintercept = tau, colour = "black", linetype = 2 ) +
   annotate( "label", x = median(df.3$A), y = 2.5, label = "A", size = 5.0) +
   annotate( "label", x = median(df.3$B), y = 2.5, label = "B", size = 5.0) +
   annotate( "label", x = median(df.3$C), y = 2.5, label = "C", size = 5.0) +
@@ -610,13 +616,15 @@ ggplot( df.3 ) +
   theme_minimal() 
 ```
 
-The red dotted line again shows the cutoff used to derive the SMP quoted above.
+The black dotted line again shows the cutoff used to derive the SMP quoted above.
 
-Now, we can answer the following questions relevant to the predictions for each patient using quantiles of $y^{(m)}$ for A, B, and C:
+Now, we can answer the following questions relevant to the predictions for each patient using the samples $y^{(m)}$ for A, B, and C.
 
-  * The **probability** that Patient A is **positive** is the number of samples $y^{(m)}_{A}$ greater than the cutoff = `0` -- it can clearly be seen that the mass of the posterior distribution for A is concentrated far below the cutoff.
-  * The **probability** that Patient B is **positive** is the number of samples $y^{(m)}_{B}$ greater than the cutoff = `r round( length( which( df.3$B > tau ) ) / length( df.3$B ), 3)`
-  * The **probability** that Patient C is **positive** is the number of samples $y^{(m)}_{C}$ greater than the cutoff = `0`
+Beginning with the traditional cut-off threshold:
+
+  * The **probability** that Patient A is **positive** is the number of samples $y^{(m)}_{A}$ greater than the cutoff -- it can clearly be seen that the mass of the posterior distribution for A is concentrated far below the cutoff, so the probability of being positive is 0 and Patient A is negative.
+  * The **probability** that Patient B is **positive** is the number of samples $y^{(m)}_{B}$ greater than the cutoff = `r round( length( which( df.3$B > tau ) ) / length( df.3$B ), 3)` -- the probability that Patient B is positive is approximately 0.5, or chance-level
+  * The **probability** that Patient C is **positive** is the number of samples $y^{(m)}_{C}$ greater than the cutoff -- clearly, the mass of the posterior distribution for Patient C is concentrated far above the cutoff (with no samples less than the cutoff), so Patient C is positive with probability 1.
   
 
 Alternatively, we can answer questions about the credible interval (here, the 80% interval) for the probabilities of being positive:
@@ -671,12 +679,12 @@ ggplot( ) +
   annotate("segment", x = point.pred$P.Y[3], xend = point.pred$P.Y[3], y = 0, yend = 1.0, colour = pt.C.col, size = 1.5, lineend = "round") +
 
     # add in cutoff 
-  annotate(x = tau, xend=tau, y=0, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
-  annotate(x = 0, xend=tau, y=tau, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
+  annotate(x = tau, xend=tau, y=0, yend=tau, colour="black", lwd=0.75, geom="segment", linetype = 2 ) +
+  annotate(x = 0, xend=tau, y=tau, yend=tau, colour="black", lwd=0.75, geom="segment", linetype = 2 ) +
     
   # the calibration curve
   geom_line( data = point.calib, 
-             mapping = aes( x = Pred.Y, y = P.Y ), alpha = 1.0, colour = "#fc9272", size = 1.0 ) +
+             mapping = aes( x = Pred.Y, y = P.Y ), alpha = 1.0, colour = "#fed98e", size = 1.0 ) +
   
   theme_minimal()
   
@@ -687,7 +695,7 @@ Inspecting the calibration plot, we can see that:
 
   * When the model predicts that the probability of being positive is **low** (to the left of the horizontal axis), in the validation set, the actual probability is marginally higher -- the model is under-estimating the probability of being positive
   * To the right of the horizontal axis, when the model is predicting the probability of being positive is **high**, in the validation set, the actual probability is somewhat lower -- the model is over-estimating the probability of being positive
-  * Near the decision-rule cutoff of `r tau` (the red dotted lines) the model appears well-calibrated
+  * Near the decision-rule cutoff of `r tau` (the black dotted lines) the model appears well-calibrated
 
 The coloured vertical lines correspond to the point predictions for patient A, B and C.
 
@@ -711,7 +719,8 @@ calib.theta.m <- data.frame( pred.Y = rep( NA, ncol(fit$PPD) ),
 
 for( j in 1:nrow(calib.theta.m) ){
   # with a single (fixed) sample theta^(m), compute predictions over all patients in validation set
-  calib.theta.m$pred.Y[j] <- PrY1( this.alpha, this.beta_B, this.beta_Age, this.beta_DAP, test.df$B[j], test.df$Age[j], test.df$DAP[j] )
+  calib.theta.m$pred.Y[j] <- PrY1( this.alpha, this.beta_B, this.beta_Age, this.beta_DAP, 
+                                   test.df$B[j], test.df$Age[j], test.df$DAP[j] )
 }
 
 point.calib.theta.m <- Calibrate.Lowess( calib.theta.m$actual.Y, calib.theta.m$pred.Y, 1, smooth.value )
@@ -726,18 +735,13 @@ ggplot( ) +
   # the perfect calibration line
   annotate(x = 0.0, xend=1.0, y=0, yend=1.0, colour="black", lwd=0.75, geom="segment" ) +
   
-  # # the three example patients
-  # annotate("segment", x = point.pred$P.Y[1], xend = point.pred$P.Y[1] , y = 0, yend = 1.0, colour = pt.A.col, size = 1.5, lineend = "round") +
-  # annotate("segment", x = point.pred$P.Y[2], xend = point.pred$P.Y[2], y = 0, yend = 1.0, colour = pt.B.col, size = 1.5, lineend = "round") +
-  # annotate("segment", x = point.pred$P.Y[3], xend = point.pred$P.Y[3], y = 0, yend = 1.0, colour = pt.C.col, size = 1.5, lineend = "round") +
-
-    # add in cutoff 
-  annotate(x = tau, xend=tau, y=0, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
-  annotate(x = 0, xend=tau, y=tau, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
+  # add in cutoff 
+  annotate(x = tau, xend=tau, y=0, yend=tau, colour="black", lwd=0.75, geom="segment", linetype = 2 ) +
+  annotate(x = 0, xend=tau, y=tau, yend=tau, colour="black", lwd=0.75, geom="segment", linetype = 2 ) +
     
   # the calibration curve
   geom_line( data = point.calib.theta.m, 
-             mapping = aes( x = Pred.Y, y = P.Y ), alpha = 1.0, colour = "#fc9272", size = 1.0 ) +
+             mapping = aes( x = Pred.Y, y = P.Y ), alpha = 1.0, colour = "#fed98e", size = 1.0 ) +
   
   theme_minimal()
 
@@ -755,43 +759,28 @@ ComputeMedian <- function( X ) {
  # -- for each of the 200 validation cases, compute the median and the 0.1 and 0.9 quantiles
  m.h <- round( as.data.frame( t( apply( bayes.PY, 2, ComputeMedian ) ) ), 3 )
 
- # -- now, we can use the medians (and upper / lower quantiles) to compute the range of calibration
+ # -- now, we can use the upper / lower quantiles to compute the range of calibration
+ this.calib.upper <- round( Calibrate.Lowess( actual.Y, m.h$upper, 1, smooth.value ), 2 )
+ this.calib.lower <- round( Calibrate.Lowess( actual.Y, m.h$lower, 1, smooth.value ), 2 )
+    
+ calib.quant <- left_join( this.calib.lower, this.calib.upper, by = "Pred.Y" )
+ # filter obvious duplicated rows from the join
+ calib.quant <- calib.quant[ duplicated( calib.quant ), ]
+ # remove rows with NAs
+ calib.quant <- calib.quant[ complete.cases( calib.quant ), ]
+ # rename for clarity
+ names( calib.quant ) <- c("P.Y.upper", "Pred.Y", "P.Y.lower")
 
- this.calib       <- Calibrate.Lowess( actual.Y, m.h$med, 1, smooth.value )
- this.calib.upper <- Calibrate.Lowess( actual.Y, m.h$upper, 1, smooth.value )
- this.calib.lower <- Calibrate.Lowess( actual.Y, m.h$lower, 1, smooth.value )
-
- calib.quant <- data.frame( Pred.Y = this.calib$Pred.Y, P.Y = this.calib$P.Y,
-                         lo.x = this.calib.lower$Pred.Y, lo.y = this.calib.lower$P.Y,
-                         hi.x = this.calib.upper$Pred.Y, hi.y = this.calib.upper$P.Y )
 ```
 
 
-```{r, echo = FALSE}
+```{r, echo = FALSE, warning=FALSE}
+# -- Construct the 'giant' plot for the paper
+
 med.A <- median( bayes.PY[ , pt.A ] )
 med.B <- median( bayes.PY[ , pt.B ] )
 med.C <- median( bayes.PY[ , pt.C ] )
 
-calib.list <- vector("list", nrow( bayes.PY ) )
-
-# - to make the plot more readable, we 'thin' the samples (and their calib curves)
-thinning.factor <- 10
-
-for (i in seq( 1, nrow( bayes.PY), by = thinning.factor ) ) {
-  # -- for one sample from the predictive distribution for all patients
-  this.calib <- Calibrate.Lowess( actual.Y, bayes.PY[i,], 1, smooth.value )
-  this.calib$id <- i
-  calib.list[[i]] <- this.calib
-}
-
-# concatenate into one huge data frame
-calib.df <- do.call( rbind, calib.list )
-
-```
-
-```{r, echo = FALSE, warning=FALSE}
-# -- Construct the 'giant' plot for the paper
-# Load back the histograms and put in as grobs
 img.pt.A <- readPNG("../Figures/pt.A.hist.png")
 img.pt.B <- readPNG("../Figures/pt.B.hist.png")
 img.pt.C <- readPNG("../Figures/pt.C.hist.png")
@@ -810,7 +799,6 @@ calib.spag.p <- ggplot( ) +
   annotation_custom(rasterGrob(img.pt.A,
                                width = unit(1,"npc"),
                                height = unit(1,"npc")),
-                    #0.04, 0.04 + inset.size, 1.1, 1.1 + inset.size) +
                     0.00, 0.00 + inset.size, common.inset.y, common.inset.y + inset.size) +
 
   annotation_custom(rasterGrob(img.pt.B,
@@ -824,15 +812,8 @@ calib.spag.p <- ggplot( ) +
                     0.8, 0.8+inset.size, common.inset.y, common.inset.y + inset.size) +
 
 
-  geom_line( data = calib.df, 
-             mapping = aes( x = Pred.Y, y = P.Y, group = id ), alpha = 0.05, colour = "#fc9272", size = 0.5 ) + 
-  
-  geom_line( data = calib.quant, mapping = aes( x = hi.x, y = hi.y ), 
-             colour = "black", size = 0.5, linetype = 2 ) +
-  
-  geom_line( data = calib.quant, mapping = aes( x = lo.x, y = lo.y ), 
-             colour = "black", size = 0.5, linetype = 2 ) +
-  
+  geom_ribbon( data = calib.quant, aes( x = Pred.Y, ymin = P.Y.lower, ymax = P.Y.upper ), fill = "#fed98e") +
+    
   # add in segment annotation for patient A,B and C mode and HDI
   annotate("segment", x = med.A, xend = med.A, y = 0, yend = 1.0, colour = pt.A.col, size = 1.5, lineend = "round") +
   annotate("segment", x = med.B, xend = med.B, y = 0, yend = 1.0, colour = pt.B.col, size = 1.5, lineend = "round") +
@@ -843,6 +824,9 @@ calib.spag.p <- ggplot( ) +
   annotate(x = 0.0, xend=0.0, y=0, yend=1.0, colour="black", lwd=1.5, geom="segment") +
   annotate(x = 0.0, xend=1.0, y=0, yend=1.0, colour="black", lwd=0.75, geom="segment" ) +
 
+   # add in cutoff 
+  annotate(x = tau, xend=tau, y=0, yend=tau, colour="black", lwd=0.75, geom="segment", linetype = 2 ) +
+  annotate(x = 0, xend=tau, y=tau, yend=tau, colour="black", lwd=0.75, geom="segment", linetype = 2 ) +
   
   theme_bw() +
   theme( axis.text=element_text(size=18),
@@ -855,6 +839,12 @@ png( '../Figures/composite_diag1.png', width = 800, height = 800, units = "px" )
   print( calib.spag.p )
   invisible( dev.off() )
 
+# For journal version  
+# tiff( '../Figures/composite_diag1.tif', width = 800, height = 800, units = "px" )
+#   print( calib.spag.p )
+#   invisible( dev.off() )
+
+  
 ```
 
 ```{r, echo = FALSE, fig.align="center", warning=FALSE}
@@ -865,14 +855,8 @@ ggplot( ) +
   scale_x_continuous(breaks = c(0.25, 0.5, 0.75, 1.0), limits = c(0, 1.0), expand = c(0,0) ) +
   xlab("\nAlgorithm Predicted Probability") +
   ylab("Actual Probability \n") + 
-  geom_line( data = calib.df, 
-             mapping = aes( x = Pred.Y, y = P.Y, group = id ), alpha = 0.05, colour = "#fc9272", size = 0.5 ) + 
-  
-  geom_line( data = calib.quant, mapping = aes( x = hi.x, y = hi.y ), 
-             colour = "black", size = 0.5, linetype = 2 ) +
-  
-  geom_line( data = calib.quant, mapping = aes( x = lo.x, y = lo.y ), 
-             colour = "black", size = 0.5, linetype = 2 ) +
+
+  geom_ribbon( data = calib.quant, aes( x = Pred.Y, ymin = P.Y.lower, ymax = P.Y.upper ), fill = "#fed98e" ) +
   
   # add in segment annotation for patient A,B and C mode and HDI
   annotate("segment", x = med.A, xend = med.A, y = 0, yend = 1.0, colour = pt.A.col, size = 1.5, lineend = "round") +
@@ -880,18 +864,19 @@ ggplot( ) +
   annotate("segment", x = med.C, xend = med.C, y = 0, yend = 1.0, colour = pt.C.col, size = 1.5, lineend = "round") +
 
   # add in cutoff 
-  annotate(x = tau, xend=tau, y=0, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
-  annotate(x = 0, xend=tau, y=tau, yend=tau, colour="red", lwd=0.75, geom="segment", linetype = 2 ) +
+  annotate(x = tau, xend=tau, y=0, yend=tau, colour="black", lwd=0.75, geom="segment", linetype = 2 ) +
+  annotate(x = 0, xend=tau, y=tau, yend=tau, colour="black", lwd=0.75, geom="segment", linetype = 2 ) +
   
   # add perfect calibration line 
   annotate(x = 0.0, xend=1.0, y=0, yend=1.0, colour="black", lwd=0.75, geom="segment" ) +
   theme_minimal()
   
-
+# need to save an EPS version for print journal 
+# ggsave(file="../Figures/calib_diag.eps", device="eps", dpi = "print")
 
 ```
 
-In addition to the spaghetti plot of individual calibration curves, the black dotted line shows the 80% credible interval of the calibration curves and we have plotted the median of the predictive distribution for the three example patients (A, B and C).
+In the above plot, the orange ribbon represents the 80% credible interval of the collection of $M$ calibration curves (rather than over-plot every calibration curve for a spaghetti plot).  The black dotted line shows the cutoff (0.4) and the three coloured lines represent the median prediction (derived from the posterior distributions of Section 6.2).  
 
 In contrast to the point-prediction calibration we can see that:
 
